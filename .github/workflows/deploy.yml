@@ -45,7 +45,8 @@ jobs:
           # Disable immediate exit to allow the loop to continue even if one iteration fails
           set +e
 
-          while IFS= read -r server; do
+          while IFS= read -r server || [[ -n "$server" ]]; do
+            echo "-------------------------------------"
             echo "Processing server with private IP: $server"
             
             # Retrieve the Instance ID for this private IP
