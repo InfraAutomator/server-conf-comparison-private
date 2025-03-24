@@ -76,7 +76,7 @@ jobs:
             COMMAND_ID=$(aws ssm send-command \
               --document-name "AWS-RunShellScript" \
               --targets "Key=instanceIds,Values=$INSTANCE_ID" \
-              --parameters '{"commands":["aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh"]}' \
+              --parameters '{"commands":["aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && cat /tmp/system_info.txt"]}'
               --region us-east-1 \
               --query "Command.CommandId" --output text)
               
