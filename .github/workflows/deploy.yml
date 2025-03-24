@@ -1,54 +1,4 @@
-# name: Execute Command on EC2
-
-# on:
-#   push:
-#     branches:
-#       - main
-#   workflow_dispatch: # Allows manual triggering
-
-# jobs:
-#   run-on-ec2:
-#     runs-on: ubuntu-latest # Uses GitHub-hosted Ubuntu runner
-
-#     steps:
-#       - name: Checkout Repository
-#         uses: actions/checkout@v4
-
-#       - name: Install SSH Client & AWS CLI
-#         run: |
-#           sudo apt-get update
-#           sudo apt-get install -y openssh-client awscli
-#         shell: bash
-
-#       - name: Configure AWS Credentials
-#         run: |
-#           mkdir -p ~/.aws
-#           cp scripts/aws-credentials.txt ~/.aws/credentials
-#           chmod 600 ~/.aws/credentials
-#         shell: bash
-
-#       - name: Set Up SSH Private Key
-#         run: |
-#           mkdir -p ~/.ssh
-#           cp scripts/private_key.pem ~/.ssh/private_key.pem
-#           chmod 600 ~/.ssh/private_key.pem
-#         shell: bash
-
-#       - name: Execute PowerShell Script
-#         run: pwsh scripts/fetch-config.ps1
-#         shell: pwsh
-
-#       - name: Upload Output to S3
-#         run: |
-#           aws s3 cp output s3://os-comparison-bucket/ --recursive
-#         shell: bash
-
-#       - name: Trigger AWS Lambda for Comparison
-#         run: |
-#           aws lambda invoke --function-name comparefiles --payload '{}' response.json
-#         shell: bash
-
-name: Execute Command on EC2
+name: Execute Command on EC2 via SSM
 
 on:
   push:
@@ -64,10 +14,10 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v3
 
-      - name: Install SSH Client & AWS CLI (If Not Installed)
+      - name: Install AWS CLI (If Not Installed)
         run: |
           sudo apt-get update
-          sudo apt-get install -y openssh-client unzip
+          sudo apt-get install -y unzip
 
           # Check if AWS CLI is installed
           if ! command -v aws &> /dev/null; then
@@ -76,7 +26,7 @@ jobs:
             unzip -o awscliv2.zip
             sudo ./aws/install
           else
-            echo "AWS CLI is already installed. Skipping installation."
+            echo "AWS CLI is already installed."
           fi
 
           # Verify AWS CLI version
@@ -90,43 +40,69 @@ jobs:
           chmod 600 ~/.aws/credentials
         shell: bash
 
-      - name: Set Up SSH Key
+      - name: Upload command.sh to S3
         run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          touch ~/.ssh/known_hosts
+          echo "Uploading command.sh to S3..."
+          aws s3 cp scripts/command.sh s3://os-comparison-bucket/command.sh
+        shell: bash
 
-          # Add all EC2 servers to known_hosts dynamically
+      - name: Execute Command on EC2 Instances via SSM
+        run: |
           while read -r server; do
-            echo "Adding $server to known_hosts"
-            ssh-keyscan -H "$server" >> ~/.ssh/known_hosts || echo "Failed to add $server"
+            echo "Executing command on EC2 instance with Private IP: $server"
+
+            # Get the Instance ID using Private IP
+            INSTANCE_ID=$(aws ec2 describe-instances \
+              --filters "Name=private-ip-address,Values=$server" \
+              --query "Reservations[*].Instances[*].InstanceId" --output text)
+
+            if [[ -z "$INSTANCE_ID" ]]; then
+              echo "❌ Instance with Private IP $server not found!"
+              continue
+            fi
+
+            echo "✅ Found Instance ID: $INSTANCE_ID"
+
+            # Run SSM Command
+            COMMAND_ID=$(aws ssm send-command \
+              --document-name "AWS-RunShellScript" \
+              --targets "Key=instanceIds,Values=$INSTANCE_ID" \
+              --parameters commands=["aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh"] \
+              --region us-east-1 \
+              --query "Command.CommandId" --output text)
+
+            echo "⏳ Waiting for command execution..."
+            sleep 10  # Wait before fetching the result
+
+            # Fetch Command Output
+            aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --region us-east-1
+
           done < scripts/serverlist.txt
         shell: bash
 
-      - name: Execute Command on EC2 Servers
-        run: |
-          while read -r server; do
-            echo "Executing command on $server"
-            ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ec2-user@"$server" "bash -s" < scripts/command.sh
-          done < scripts/serverlist.txt
-        shell: bash
-
-      # - name: Upload Output to S3
-      #   run: |
-      #     aws s3 cp . s3://os-comparison-bucket/ --recursive --exclude "*" --include "output_*.txt"
-      #   shell: bash
       - name: Upload Output to S3
         run: |
           while read -r server; do
-            echo "Uploading output from $server to S3"
-            scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ec2-user@"$server":/tmp/system_info.txt ./"$server"_system_info.txt
-            aws s3 cp ./"$server"_system_info.txt s3://os-comparison-bucket/
-          done < scripts/serverlist.txt
-        shell: bash
+            INSTANCE_ID=$(aws ec2 describe-instances \
+              --filters "Name=private-ip-address,Values=$server" \
+              --query "Reservations[*].Instances[*].InstanceId" --output text)
 
-      - name: Trigger AWS Lambda for Comparison
-        run: |
-          aws lambda invoke --function-name comparefiles --payload '{}' response.json
+            if [[ -z "$INSTANCE_ID" ]]; then
+              echo "❌ Instance with Private IP $server not found!"
+              continue
+            fi
+
+            # Upload logs to S3
+            aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --region us-east-1 \
+              --query "StandardOutputContent" --output text > "${server}_output.txt"
+
+            echo "Uploading output from $server to S3..."
+            aws s3 cp "${server}_output.txt" s3://os-comparison-bucket/
+          done < scripts/serverlist.txt
         shell: bash
