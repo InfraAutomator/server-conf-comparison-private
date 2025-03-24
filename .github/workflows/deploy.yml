@@ -105,7 +105,7 @@ jobs:
             fi
             
             echo "Second command sent with Command ID: $SECOND_COMMAND_ID. Waiting for file copy..."
-            sleep 10  # Wait for file transfer
+            sleep 30  # Wait for file transfer
             
           done < scripts/serverlist.txt
         shell: bash
