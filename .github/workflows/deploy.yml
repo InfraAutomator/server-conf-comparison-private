@@ -40,22 +40,10 @@ jobs:
           aws s3 cp scripts/command.sh s3://os-comparison-bucket/command.sh
         shell: bash
 
-      - name: Execute Command on EC2 Instances via SSM and Upload Output
+      - name: Execute Command on EC2 Instances via SSM and Upload System Info
         run: |
-          # Disable immediate exit to allow the loop to continue even if one iteration fails
+          # Disable immediate exit so the loop continues even if one iteration fails
           set +e
-
-          # Helper function to get SSM command output
-          get_ssm_output() {
-            local cmd_id="$1"
-            local instance_id="$2"
-            aws ssm get-command-invocation \
-              --command-id "$cmd_id" \
-              --instance-id "$instance_id" \
-              --region us-east-1 \
-              --query '{Status:Status, StandardOutputContent:StandardOutputContent, StandardErrorContent:StandardErrorContent}' \
-              --output json
-          }
 
           while IFS= read -r server || [[ -n "$server" ]]; do
             echo "-------------------------------------"
@@ -72,30 +60,36 @@ jobs:
             fi
             echo "Found Instance ID: $INSTANCE_ID for IP: $server"
             
-            # SSM command: download and execute command.sh from S3 on the instance
-            COMMAND_ID=$(aws ssm send-command \
+            # Construct the command to download and execute command.sh,
+            # then upload /tmp/system_info.txt to S3 with a unique file name.
+            CMD="aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && aws s3 cp /tmp/system_info.txt s3://os-comparison-bucket/system_info_${server}_${INSTANCE_ID}.txt"
+            echo "Command to run: $CMD"
+
+            # Send the SSM command with the constructed command string.
+            FIRST_COMMAND_ID=$(aws ssm send-command \
               --document-name "AWS-RunShellScript" \
               --targets "Key=instanceIds,Values=$INSTANCE_ID" \
-              --parameters '{"commands":["aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && cat /tmp/system_info.txt"]}'
+              --parameters '{"commands":["'"$CMD"'"]}' \
               --region us-east-1 \
               --query "Command.CommandId" --output text)
               
-            if [[ -z "$COMMAND_ID" ]]; then
+            if [[ -z "$FIRST_COMMAND_ID" ]]; then
               echo "Failed to send SSM command to instance $INSTANCE_ID"
               continue
             fi
             
-            echo "Command sent with Command ID: $COMMAND_ID. Waiting for execution..."
-            sleep 15  # Wait for command execution
+            echo "SSM command sent with Command ID: $FIRST_COMMAND_ID. Waiting for execution..."
+            sleep 20  # Adjust this delay as needed
             
-            echo "Fetching SSM command output for instance $INSTANCE_ID..."
-            SSM_OUTPUT=$(get_ssm_output "$COMMAND_ID" "$INSTANCE_ID")
-            OUTPUT_FILE="ssm_output_${server}_${INSTANCE_ID}.json"
-            echo "$SSM_OUTPUT" > "$OUTPUT_FILE"
-            echo "SSM output for instance $INSTANCE_ID saved to $OUTPUT_FILE"
+            # Check if the system_info.txt file was uploaded to S3
+            TARGET_FILE="system_info_${server}_${INSTANCE_ID}.txt"
+            echo "Checking for file s3://os-comparison-bucket/${TARGET_FILE}..."
+            if aws s3 ls s3://os-comparison-bucket/"${TARGET_FILE}" > /dev/null 2>&1; then
+              echo "File ${TARGET_FILE} successfully uploaded to S3."
+            else
+              echo "File ${TARGET_FILE} not found in S3."
+            fi
             
-            echo "Uploading $OUTPUT_FILE to S3..."
-            aws s3 cp "$OUTPUT_FILE" s3://os-comparison-bucket/ || echo "Failed to upload $OUTPUT_FILE"
           done < scripts/serverlist.txt
         shell: bash
 
