@@ -1,0 +1,132 @@
+# name: Execute Command on EC2
+
+# on:
+#   push:
+#     branches:
+#       - main
+#   workflow_dispatch: # Allows manual triggering
+
+# jobs:
+#   run-on-ec2:
+#     runs-on: ubuntu-latest # Uses GitHub-hosted Ubuntu runner
+
+#     steps:
+#       - name: Checkout Repository
+#         uses: actions/checkout@v4
+
+#       - name: Install SSH Client & AWS CLI
+#         run: |
+#           sudo apt-get update
+#           sudo apt-get install -y openssh-client awscli
+#         shell: bash
+
+#       - name: Configure AWS Credentials
+#         run: |
+#           mkdir -p ~/.aws
+#           cp scripts/aws-credentials.txt ~/.aws/credentials
+#           chmod 600 ~/.aws/credentials
+#         shell: bash
+
+#       - name: Set Up SSH Private Key
+#         run: |
+#           mkdir -p ~/.ssh
+#           cp scripts/private_key.pem ~/.ssh/private_key.pem
+#           chmod 600 ~/.ssh/private_key.pem
+#         shell: bash
+
+#       - name: Execute PowerShell Script
+#         run: pwsh scripts/fetch-config.ps1
+#         shell: pwsh
+
+#       - name: Upload Output to S3
+#         run: |
+#           aws s3 cp output s3://os-comparison-bucket/ --recursive
+#         shell: bash
+
+#       - name: Trigger AWS Lambda for Comparison
+#         run: |
+#           aws lambda invoke --function-name comparefiles --payload '{}' response.json
+#         shell: bash
+
+name: Execute Command on EC2
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: # Allows manual trigger
+
+jobs:
+  run-on-ec2:
+    runs-on: ubuntu-latest # GitHub-hosted runner
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Install SSH Client & AWS CLI (If Not Installed)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssh-client unzip
+
+          # Check if AWS CLI is installed
+          if ! command -v aws &> /dev/null; then
+            echo "AWS CLI not found. Installing now..."
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip -o awscliv2.zip
+            sudo ./aws/install
+          else
+            echo "AWS CLI is already installed. Skipping installation."
+          fi
+
+          # Verify AWS CLI version
+          aws --version
+        shell: bash
+
+      - name: Configure AWS Credentials (For GitHub Runner Only)
+        run: |
+          mkdir -p ~/.aws
+          cp scripts/aws-credentials.txt ~/.aws/credentials
+          chmod 600 ~/.aws/credentials
+        shell: bash
+
+      - name: Set Up SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          cp scripts/private_key.pem ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          touch ~/.ssh/known_hosts
+
+          # Add all EC2 servers to known_hosts dynamically
+          while read -r server; do
+            echo "Adding $server to known_hosts"
+            ssh-keyscan -H "$server" >> ~/.ssh/known_hosts
+          done < scripts/serverlist.txt
+        shell: bash
+
+      - name: Execute Command on EC2 Servers
+        run: |
+          while read -r server; do
+            echo "Executing command on $server"
+            ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ec2-user@"$server" "bash -s" < scripts/command.sh
+          done < scripts/serverlist.txt
+        shell: bash
+
+      # - name: Upload Output to S3
+      #   run: |
+      #     aws s3 cp . s3://os-comparison-bucket/ --recursive --exclude "*" --include "output_*.txt"
+      #   shell: bash
+      - name: Upload Output to S3
+        run: |
+          while read -r server; do
+            echo "Uploading output from $server to S3"
+            scp -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ec2-user@"$server":/tmp/system_info.txt ./"$server"_system_info.txt
+            aws s3 cp ./"$server"_system_info.txt s3://os-comparison-bucket/
+          done < scripts/serverlist.txt
+        shell: bash
+
+      - name: Trigger AWS Lambda for Comparison
+        run: |
+          aws lambda invoke --function-name comparefiles --payload '{}' response.json
+        shell: bash
