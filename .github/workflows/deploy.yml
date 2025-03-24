@@ -116,12 +116,12 @@ jobs:
               --query '{Status:Status, StandardOutputContent:StandardOutputContent, StandardErrorContent:StandardErrorContent}' \
               --output json)
               
-            SECOND_OUTPUT_FILE="ssm_second_output_${server}_${INSTANCE_ID}.json"
-            echo "$SECOND_SSM_OUTPUT" > "$SECOND_OUTPUT_FILE"
-            echo "Second SSM output for instance $INSTANCE_ID saved to $SECOND_OUTPUT_FILE"
+            # SECOND_OUTPUT_FILE="ssm_second_output_${server}_${INSTANCE_ID}.json"
+            # echo "$SECOND_SSM_OUTPUT" > "$SECOND_OUTPUT_FILE"
+            # echo "Second SSM output for instance $INSTANCE_ID saved to $SECOND_OUTPUT_FILE"
             
-            echo "Uploading $SECOND_OUTPUT_FILE to S3..."
-            aws s3 cp "$SECOND_OUTPUT_FILE" s3://os-comparison-bucket/ || echo "Failed to upload $SECOND_OUTPUT_FILE"
+            # echo "Uploading $SECOND_OUTPUT_FILE to S3..."
+            # aws s3 cp "$SECOND_OUTPUT_FILE" s3://os-comparison-bucket/ || echo "Failed to upload $SECOND_OUTPUT_FILE"
             
           done < scripts/serverlist.txt
         shell: bash
