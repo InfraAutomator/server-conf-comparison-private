@@ -19,90 +19,84 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y unzip
 
-          # Check if AWS CLI is installed
           if ! command -v aws &> /dev/null; then
-            echo "AWS CLI not found. Installing now..."
+            echo "AWS CLI not found. Installing..."
             curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
             unzip -o awscliv2.zip
             sudo ./aws/install
-          else
-            echo "AWS CLI is already installed."
           fi
 
-          # Verify AWS CLI version
           aws --version
         shell: bash
 
-      - name: Configure AWS Credentials (For GitHub Runner Only)
+      - name: Configure AWS Credentials (For GitHub Runner)
         run: |
           mkdir -p ~/.aws
           cp scripts/aws-credentials.txt ~/.aws/credentials
           chmod 600 ~/.aws/credentials
         shell: bash
 
-      - name: Upload command.sh to S3
+      - name: Get Instance IDs for Private IPs
         run: |
-          echo "Uploading command.sh to S3..."
-          aws s3 cp scripts/command.sh s3://os-comparison-bucket/command.sh
-        shell: bash
+          echo "Fetching instance IDs for private IPs..."
+          > scripts/instance_ids.txt # Clear previous file
 
-      - name: Execute Command on EC2 Instances via SSM
-        run: |
           while read -r server; do
-            echo "Executing command on EC2 instance with Private IP: $server"
-
-            # Get the Instance ID using Private IP
             INSTANCE_ID=$(aws ec2 describe-instances \
               --filters "Name=private-ip-address,Values=$server" \
               --query "Reservations[*].Instances[*].InstanceId" --output text)
-
-            if [[ -z "$INSTANCE_ID" ]]; then
-              echo "❌ Instance with Private IP $server not found!"
-              continue
+              
+            if [[ -n "$INSTANCE_ID" ]]; then
+              echo "$INSTANCE_ID" >> scripts/instance_ids.txt
+              echo "✅ Found instance ID: $INSTANCE_ID for IP: $server"
+            else
+              echo "❌ No instance found for IP: $server"
             fi
+          done < scripts/serverlist.txt
+        shell: bash
 
-            echo "✅ Found Instance ID: $INSTANCE_ID"
+      - name: Upload command.sh to S3
+        run: |
+          aws s3 cp scripts/command.sh s3://os-comparison-bucket/command.sh
+        shell: bash
 
-            # Run SSM Command
+      - name: Execute Command on EC2 via SSM
+        run: |
+          while read -r INSTANCE_ID; do
+            echo "🚀 Sending SSM command to instance: $INSTANCE_ID"
+
             COMMAND_ID=$(aws ssm send-command \
               --document-name "AWS-RunShellScript" \
               --targets "Key=instanceIds,Values=$INSTANCE_ID" \
-              --parameters commands=["aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh"] \
+              --parameters '{"commands":["aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh"]}' \
               --region us-east-1 \
               --query "Command.CommandId" --output text)
 
-            echo "⏳ Waiting for command execution..."
-            sleep 10  # Wait before fetching the result
+            if [[ -z "$COMMAND_ID" ]]; then
+              echo "❌ Failed to send SSM command to $INSTANCE_ID"
+              exit 1
+            fi
 
-            # Fetch Command Output
+            echo "⏳ Waiting for command execution..."
+            sleep 10  # Give time for execution
+
+            echo "✅ Fetching command output..."
             aws ssm get-command-invocation \
               --command-id "$COMMAND_ID" \
               --instance-id "$INSTANCE_ID" \
-              --region us-east-1
+              --region us-east-1 \
+              --query '{Status:Status, StandardOutputContent:StandardOutputContent, StandardErrorContent:StandardErrorContent}' \
+              --output json | tee "output_$INSTANCE_ID.json"
 
-          done < scripts/serverlist.txt
+          done < scripts/instance_ids.txt
         shell: bash
 
       - name: Upload Output to S3
         run: |
-          while read -r server; do
-            INSTANCE_ID=$(aws ec2 describe-instances \
-              --filters "Name=private-ip-address,Values=$server" \
-              --query "Reservations[*].Instances[*].InstanceId" --output text)
+          aws s3 cp . s3://os-comparison-bucket/ --recursive --exclude "*" --include "output_*.json"
+        shell: bash
 
-            if [[ -z "$INSTANCE_ID" ]]; then
-              echo "❌ Instance with Private IP $server not found!"
-              continue
-            fi
-
-            # Upload logs to S3
-            aws ssm get-command-invocation \
-              --command-id "$COMMAND_ID" \
-              --instance-id "$INSTANCE_ID" \
-              --region us-east-1 \
-              --query "StandardOutputContent" --output text > "${server}_output.txt"
-
-            echo "Uploading output from $server to S3..."
-            aws s3 cp "${server}_output.txt" s3://os-comparison-bucket/
-          done < scripts/serverlist.txt
+      - name: Trigger AWS Lambda for Comparison
+        run: |
+          aws lambda invoke --function-name comparefiles --payload '{}' response.json
         shell: bash
