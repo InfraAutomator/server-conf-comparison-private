@@ -42,6 +42,7 @@ jobs:
 
       - name: Execute Command on EC2 Instances via SSM and Upload Output
         run: |
+          set +e
           while IFS= read -r server; do
             echo "Processing server with private IP: $server"
 
