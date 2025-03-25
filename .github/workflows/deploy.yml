@@ -32,6 +32,13 @@ jobs:
         aws --version
       shell: bash
 
+    - name: Configure AWS Credentials
+      run: |
+        mkdir -p ~/.aws
+        cp scripts/aws-credentials.txt ~/.aws/credentials
+        chmod 600 ~/.aws/credentials
+      shell: bash
+
     - name: Attach IAM Role If Missing
       run: |
         REQUIRED_IAM_ROLE="${{ env.REQUIRED_IAM_ROLE }}"
