@@ -15,36 +15,6 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v3
 
-    - name: Install SSM Agent
-      run: |
-        echo "Installing SSM Agent..."
-        OS=$(uname -s)
-        if [[ "$OS" == "Linux" ]]; then
-          DISTRO=$(cat /etc/os-release | grep ^ID= | cut -d'=' -f2 | tr -d '"')
-          case "$DISTRO" in
-            "amzn"|"amazonlinux")
-              sudo yum install -y amazon-ssm-agent
-              sudo systemctl enable amazon-ssm-agent
-              sudo systemctl start amazon-ssm-agent
-              ;;
-            "ubuntu")
-              sudo snap install amazon-ssm-agent --classic
-              sudo systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent
-              sudo systemctl start snap.amazon-ssm-agent.amazon-ssm-agent
-              ;;
-            "rhel"|"redhat")
-              sudo yum install -y https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm
-              sudo systemctl enable amazon-ssm-agent
-              sudo systemctl start amazon-ssm-agent
-              ;;
-            *)
-              echo "Unsupported OS: $DISTRO"
-              exit 1
-              ;;
-          esac
-        fi
-      shell: bash
-
     - name: Install AWS CLI (If Not Installed)
       run: |
         sudo apt-get update
@@ -65,19 +35,34 @@ jobs:
         chmod 600 ~/.aws/credentials
       shell: bash
 
-    - name: Upload command.sh to S3
+    - name: Assign IAM Role to Instances
       run: |
-        echo "Uploading command.sh to S3..."
-        aws s3 cp scripts/command.sh s3://os-comparison-bucket/command.sh
-      shell: bash
+        ROLE_NAME="ssmrequiredrole"
+        INSTANCE_PROFILE_NAME="AWSApplicationMigrationConversionServerRole"
 
-    - name: Execute Command on EC2 Instances via SSM and Upload System Info
-      run: |
-        set +e
+        # Check if the IAM role exists; create if not
+        if ! aws iam get-role --role-name "$ROLE_NAME" &> /dev/null; then
+          echo "Creating IAM role: $ROLE_NAME..."
+          aws iam create-role --role-name "$ROLE_NAME" \
+            --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+          
+          # Attach SSM policy
+          aws iam attach-role-policy --role-name "$ROLE_NAME" \
+            --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+          
+          echo "IAM role $ROLE_NAME created and policy attached."
+        fi
+
+        # Check if the instance profile exists; create if not
+        if ! aws iam get-instance-profile --instance-profile-name "$INSTANCE_PROFILE_NAME" &> /dev/null; then
+          echo "Creating IAM instance profile: $INSTANCE_PROFILE_NAME..."
+          aws iam create-instance-profile --instance-profile-name "$INSTANCE_PROFILE_NAME"
+          aws iam add-role-to-instance-profile --instance-profile-name "$INSTANCE_PROFILE_NAME" --role-name "$ROLE_NAME"
+          echo "IAM instance profile $INSTANCE_PROFILE_NAME created and role added."
+        fi
+
+        # Assign IAM role to each instance
         while IFS= read -r server || [[ -n "$server" ]]; do
-          echo "-------------------------------------"
-          echo "Processing server with private IP: $server"
-
           INSTANCE_ID=$(aws ec2 describe-instances \
             --filters "Name=private-ip-address,Values=$server" \
             --query "Reservations[*].Instances[*].InstanceId" --output text)
@@ -86,30 +71,88 @@ jobs:
             echo "No instance found for IP: $server"
             continue
           fi
-          echo "Found Instance ID: $INSTANCE_ID for IP: $server"
+          
+          CURRENT_PROFILE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query "Reservations[*].Instances[*].IamInstanceProfile.Arn" --output text)
 
-          CMD="aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && aws s3 cp /tmp/system_info.txt s3://os-comparison-bucket/system_info_${server}_${INSTANCE_ID}.txt"
-          echo "Command to run: $CMD"
+          if [[ -z "$CURRENT_PROFILE" ]]; then
+            echo "Assigning IAM role to instance: $INSTANCE_ID"
+            aws ec2 associate-iam-instance-profile \
+              --instance-id "$INSTANCE_ID" \
+              --iam-instance-profile Name="$INSTANCE_PROFILE_NAME"
+            sleep 10  # Wait for the role to attach properly
+          else
+            echo "Instance $INSTANCE_ID already has an IAM role."
+          fi
+        done < scripts/serverlist.txt
+      shell: bash
 
-          FIRST_COMMAND_ID=$(aws ssm send-command \
+    - name: Install SSM Agent on Instances
+      run: |
+        while IFS= read -r server || [[ -n "$server" ]]; do
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=private-ip-address,Values=$server" \
+            --query "Reservations[*].Instances[*].InstanceId" --output text)
+
+          if [[ -z "$INSTANCE_ID" ]]; then
+            echo "No instance found for IP: $server"
+            continue
+          fi
+
+          echo "Installing SSM Agent on instance: $INSTANCE_ID"
+
+          # Command to install SSM agent based on the OS
+          CMD="\
+          if [ -f /etc/os-release ]; then . /etc/os-release; OS=\$ID; else OS='unknown'; fi; \
+          case \"\$OS\" in \
+            amazon) sudo yum install -y amazon-ssm-agent && sudo systemctl enable amazon-ssm-agent && sudo systemctl start amazon-ssm-agent ;; \
+            ubuntu) sudo snap install amazon-ssm-agent && sudo systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent && sudo systemctl start snap.amazon-ssm-agent.amazon-ssm-agent ;; \
+            redhat|centos) sudo yum install -y amazon-ssm-agent && sudo systemctl enable amazon-ssm-agent && sudo systemctl start amazon-ssm-agent ;; \
+            debian) sudo apt-get update && sudo apt-get install -y amazon-ssm-agent && sudo systemctl enable amazon-ssm-agent && sudo systemctl start amazon-ssm-agent ;; \
+            suse) sudo zypper install -y amazon-ssm-agent && sudo systemctl enable amazon-ssm-agent && sudo systemctl start amazon-ssm-agent ;; \
+            *) echo 'OS not recognized, skipping SSM agent installation.' ;; \
+          esac"
+
+          # Send command via SSM
+          aws ssm send-command \
             --document-name "AWS-RunShellScript" \
             --targets "Key=instanceIds,Values=$INSTANCE_ID" \
             --parameters '{"commands":["'"$CMD"'"]}' \
             --region us-east-1 \
-            --query "Command.CommandId" --output text)
+            --query "Command.CommandId" --output text
 
-          if [[ -z "$FIRST_COMMAND_ID" ]]; then
-            echo "Failed to send SSM command to instance $INSTANCE_ID"
+          sleep 10  # Allow time for installation
+        done < scripts/serverlist.txt
+      shell: bash
+
+    - name: Upload command.sh to S3
+      run: |
+        aws s3 cp scripts/command.sh s3://os-comparison-bucket/command.sh
+      shell: bash
+
+    - name: Execute Command on EC2 Instances via SSM
+      run: |
+        while IFS= read -r server || [[ -n "$server" ]]; do
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=private-ip-address,Values=$server" \
+            --query "Reservations[*].Instances[*].InstanceId" --output text)
+
+          if [[ -z "$INSTANCE_ID" ]]; then
+            echo "No instance found for IP: $server"
             continue
           fi
 
-          echo "SSM command sent with Command ID: $FIRST_COMMAND_ID."
-          sleep 20
+          CMD="aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && aws s3 cp /tmp/system_info.txt s3://os-comparison-bucket/system_info_${server}_${INSTANCE_ID}.txt"
+
+          aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --targets "Key=instanceIds,Values=$INSTANCE_ID" \
+            --parameters '{"commands":["'"$CMD"'"]}' \
+            --region us-east-1 \
+            --query "Command.CommandId" --output text
         done < scripts/serverlist.txt
       shell: bash
 
     - name: Trigger AWS Lambda for Comparison
       run: |
-        echo "Triggering AWS Lambda function for comparison..."
         aws lambda invoke --function-name comparefiles --payload '{}' response.json
       shell: bash
