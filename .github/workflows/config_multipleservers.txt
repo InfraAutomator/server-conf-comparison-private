@@ -1,3 +1,4 @@
+#running script as of 25th March ##
 name: Execute Command on EC2 via SSM
 
 on:
@@ -14,36 +15,6 @@ jobs:
     steps:
     - name: Checkout Repository
       uses: actions/checkout@v3
-
-    - name: Install SSM Agent
-      run: |
-        echo "Installing SSM Agent..."
-        OS=$(uname -s)
-        if [[ "$OS" == "Linux" ]]; then
-          DISTRO=$(cat /etc/os-release | grep ^ID= | cut -d'=' -f2 | tr -d '"')
-          case "$DISTRO" in
-            "amzn"|"amazonlinux")
-              sudo yum install -y amazon-ssm-agent
-              sudo systemctl enable amazon-ssm-agent
-              sudo systemctl start amazon-ssm-agent
-              ;;
-            "ubuntu")
-              sudo snap install amazon-ssm-agent --classic
-              sudo systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent
-              sudo systemctl start snap.amazon-ssm-agent.amazon-ssm-agent
-              ;;
-            "rhel"|"redhat")
-              sudo yum install -y https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm
-              sudo systemctl enable amazon-ssm-agent
-              sudo systemctl start amazon-ssm-agent
-              ;;
-            *)
-              echo "Unsupported OS: $DISTRO"
-              exit 1
-              ;;
-          esac
-        fi
-      shell: bash
 
     - name: Install AWS CLI (If Not Installed)
       run: |
@@ -73,11 +44,14 @@ jobs:
 
     - name: Execute Command on EC2 Instances via SSM and Upload System Info
       run: |
+        # Disable immediate exit so the loop continues even if one iteration fails
         set +e
+
         while IFS= read -r server || [[ -n "$server" ]]; do
           echo "-------------------------------------"
           echo "Processing server with private IP: $server"
 
+          # Retrieve the Instance ID for this private IP
           INSTANCE_ID=$(aws ec2 describe-instances \
             --filters "Name=private-ip-address,Values=$server" \
             --query "Reservations[*].Instances[*].InstanceId" --output text)
@@ -88,9 +62,12 @@ jobs:
           fi
           echo "Found Instance ID: $INSTANCE_ID for IP: $server"
 
+          # Construct the command to download and execute command.sh,# then upload /tmp/system_info.txt to S3 with a unique file name.
+
           CMD="aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && aws s3 cp /tmp/system_info.txt s3://os-comparison-bucket/system_info_${server}_${INSTANCE_ID}.txt"
           echo "Command to run: $CMD"
 
+          # Send the SSM command with the constructed command string.
           FIRST_COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
             --targets "Key=instanceIds,Values=$INSTANCE_ID" \
@@ -104,7 +81,8 @@ jobs:
           fi
 
           echo "SSM command sent with Command ID: $FIRST_COMMAND_ID."
-          sleep 20
+          sleep 20  # Adjust this delay as needed
+
         done < scripts/serverlist.txt
       shell: bash
 
