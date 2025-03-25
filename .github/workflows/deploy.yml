@@ -9,7 +9,11 @@ on:
 
 jobs:
   run-on-ec2:
-    runs-on: ubuntu-latest # GitHub-hosted runner
+    runs-on: ubuntu-latest
+
+    env:
+      REQUIRED_IAM_ROLE: "ssmrequiredrole" # 🔹 Replace with your actual IAM Role Name
+      AWS_REGION: "us-east-1" # 🔹 Replace with your AWS Region
 
     steps:
     - name: Checkout Repository
@@ -28,24 +32,20 @@ jobs:
         aws --version
       shell: bash
 
-    - name: Configure AWS Credentials
+    - name: Attach IAM Role If Missing
       run: |
-        mkdir -p ~/.aws
-        cp scripts/aws-credentials.txt ~/.aws/credentials
-        chmod 600 ~/.aws/credentials
-      shell: bash
+        REQUIRED_IAM_ROLE="${{ env.REQUIRED_IAM_ROLE }}"
+        AWS_REGION="${{ env.AWS_REGION }}"
 
-    - name: Install SSM Agent on EC2 Instances
-      run: |
         while IFS= read -r server || [[ -n "$server" ]]; do
-          echo "Checking if instance has correct IAM role: $server"
+          echo "Checking IAM role for instance with private IP: $server"
 
           INSTANCE_ID=$(aws ec2 describe-instances \
             --filters "Name=private-ip-address,Values=$server" \
             --query "Reservations[*].Instances[*].InstanceId" --output text)
 
           if [[ -z "$INSTANCE_ID" ]]; then
-            echo "No instance found for IP: $server. Skipping..."
+            echo "No instance found for IP: $server"
             continue
           fi
 
@@ -54,21 +54,58 @@ jobs:
             --query "Reservations[0].Instances[0].IamInstanceProfile.Arn" --output text)
 
           if [[ "$IAM_ROLE" == "None" ]]; then
-            echo "No IAM role attached to instance $INSTANCE_ID. Skipping..."
+            echo "No IAM role attached to instance $INSTANCE_ID. Attaching $REQUIRED_IAM_ROLE..."
+            aws ec2 associate-iam-instance-profile \
+              --instance-id "$INSTANCE_ID" \
+              --iam-instance-profile Name="$REQUIRED_IAM_ROLE"
+
+            echo "Waiting for IAM role to attach..."
+            sleep 30  # Adjust as needed
+          fi
+
+        done < scripts/serverlist.txt
+      shell: bash
+
+    - name: Install SSM Agent on EC2 Instances
+      run: |
+        while IFS= read -r server || [[ -n "$server" ]]; do
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=private-ip-address,Values=$server" \
+            --query "Reservations[*].Instances[*].InstanceId" --output text)
+
+          if [[ -z "$INSTANCE_ID" ]]; then
+            echo "No instance found for IP: $server"
             continue
           fi
 
-          echo "Installing SSM Agent on instance $INSTANCE_ID..."
-          CMD="sudo yum install -y amazon-ssm-agent || sudo apt-get install -y amazon-ssm-agent || sudo dnf install -y amazon-ssm-agent || sudo snap install amazon-ssm-agent"
-          
+          echo "Installing SSM Agent on instance: $INSTANCE_ID"
+
+          CMD="if [ -f /etc/os-release ]; then
+                  source /etc/os-release;
+                  case \$ID in
+                      amzn) sudo yum install -y amazon-ssm-agent && sudo systemctl enable amazon-ssm-agent && sudo systemctl start amazon-ssm-agent ;;
+                      ubuntu) sudo snap install amazon-ssm-agent ;;
+                      rhel|centos) sudo yum install -y amazon-ssm-agent && sudo systemctl enable amazon-ssm-agent && sudo systemctl start amazon-ssm-agent ;;
+                      *) echo 'Unsupported OS' ;;
+                  esac
+               else
+                  echo 'OS details not found'
+               fi"
+
           COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
             --targets "Key=instanceIds,Values=$INSTANCE_ID" \
             --parameters '{"commands":["'"$CMD"'"]}' \
-            --region us-east-1 \
+            --region "$AWS_REGION" \
             --query "Command.CommandId" --output text)
 
-          echo "SSM Agent installation command sent with Command ID: $COMMAND_ID"
+          if [[ -z "$COMMAND_ID" ]]; then
+            echo "Failed to send SSM installation command to instance $INSTANCE_ID"
+            continue
+          fi
+
+          echo "SSM Agent installation command sent. Waiting 30 seconds..."
+          sleep 30
 
         done < scripts/serverlist.txt
       shell: bash
@@ -81,12 +118,7 @@ jobs:
 
     - name: Execute Command on EC2 Instances via SSM and Upload System Info
       run: |
-        set +e
-
         while IFS= read -r server || [[ -n "$server" ]]; do
-          echo "-------------------------------------"
-          echo "Processing server with private IP: $server"
-
           INSTANCE_ID=$(aws ec2 describe-instances \
             --filters "Name=private-ip-address,Values=$server" \
             --query "Reservations[*].Instances[*].InstanceId" --output text)
@@ -95,35 +127,25 @@ jobs:
             echo "No instance found for IP: $server"
             continue
           fi
-          echo "Found Instance ID: $INSTANCE_ID for IP: $server"
 
-          # Check if instance has IAM role
-          IAM_ROLE=$(aws ec2 describe-instances \
-            --instance-ids "$INSTANCE_ID" \
-            --query "Reservations[0].Instances[0].IamInstanceProfile.Arn" --output text)
-
-          if [[ "$IAM_ROLE" == "None" ]]; then
-            echo "No IAM role attached to instance $INSTANCE_ID. Skipping..."
-            continue
-          fi
+          echo "Executing command on instance: $INSTANCE_ID"
 
           CMD="aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && aws s3 cp /tmp/system_info.txt s3://os-comparison-bucket/system_info_${server}_${INSTANCE_ID}.txt"
-          echo "Command to run: $CMD"
 
-          FIRST_COMMAND_ID=$(aws ssm send-command \
+          COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
             --targets "Key=instanceIds,Values=$INSTANCE_ID" \
             --parameters '{"commands":["'"$CMD"'"]}' \
-            --region us-east-1 \
+            --region "$AWS_REGION" \
             --query "Command.CommandId" --output text)
 
-          if [[ -z "$FIRST_COMMAND_ID" ]]; then
+          if [[ -z "$COMMAND_ID" ]]; then
             echo "Failed to send SSM command to instance $INSTANCE_ID"
             continue
           fi
 
-          echo "SSM command sent with Command ID: $FIRST_COMMAND_ID."
-          sleep 20  
+          echo "SSM command sent with Command ID: $COMMAND_ID. Waiting 20 seconds..."
+          sleep 20
 
         done < scripts/serverlist.txt
       shell: bash
