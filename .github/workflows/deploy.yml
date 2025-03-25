@@ -28,6 +28,13 @@ jobs:
         aws --version
       shell: bash
 
+    - name: Configure AWS Credentials
+      run: |
+        mkdir -p ~/.aws
+        cp scripts/aws-credentials.txt ~/.aws/credentials
+        chmod 600 ~/.aws/credentials
+      shell: bash
+
     - name: Install SSM Agent on EC2 Instances
       run: |
         while IFS= read -r server || [[ -n "$server" ]]; do
@@ -64,13 +71,6 @@ jobs:
           echo "SSM Agent installation command sent with Command ID: $COMMAND_ID"
 
         done < scripts/serverlist.txt
-      shell: bash
-
-    - name: Configure AWS Credentials
-      run: |
-        mkdir -p ~/.aws
-        cp scripts/aws-credentials.txt ~/.aws/credentials
-        chmod 600 ~/.aws/credentials
       shell: bash
 
     - name: Upload command.sh to S3
