@@ -1,4 +1,5 @@
-name: 'Execute Command on EC2 via SSM'
+#running script as of 25th March ##
+name: Execute Command on EC2 via SSM
 
 on:
   push:
@@ -12,42 +13,42 @@ jobs:
     runs-on: ubuntu-latest # GitHub-hosted runner
 
     steps:
-    - name: 'Checkout Repository'
+    - name: Checkout Repository
       uses: actions/checkout@v3
 
-    - name: 'Install AWS CLI (If Not Installed)'
+    - name: Install AWS CLI (If Not Installed)
       run: |
         sudo apt-get update
         sudo apt-get install -y unzip
         if ! command -v aws &> /dev/null; then
-          echo 'AWS CLI not found. Installing...'
-          curl 'https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip' -o 'awscliv2.zip'
+          echo "AWS CLI not found. Installing..."
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
           unzip -o awscliv2.zip
           sudo ./aws/install
         fi
         aws --version
       shell: bash
 
-    - name: 'Configure AWS Credentials'
+    - name: Configure AWS Credentials
       run: |
         mkdir -p ~/.aws
         cp scripts/aws-credentials.txt ~/.aws/credentials
         chmod 600 ~/.aws/credentials
       shell: bash
 
-    - name: 'Upload command.sh to S3'
+    - name: Upload command.sh to S3
       run: |
-        echo 'Uploading command.sh to S3...'
+        echo "Uploading command.sh to S3..."
         aws s3 cp scripts/command.sh s3://os-comparison-bucket/command.sh
       shell: bash
 
-    - name: 'Execute Command on EC2 Instances via SSM and Upload System Info'
+    - name: Execute Command on EC2 Instances via SSM and Upload System Info
       run: |
         # Disable immediate exit so the loop continues even if one iteration fails
         set +e
 
         while IFS= read -r server || [[ -n "$server" ]]; do
-          echo '-------------------------------------'
+          echo "-------------------------------------"
           echo "Processing server with private IP: $server"
 
           # Retrieve the Instance ID for this private IP
@@ -61,7 +62,8 @@ jobs:
           fi
           echo "Found Instance ID: $INSTANCE_ID for IP: $server"
 
-          # Construct the command to download and execute command.sh, then upload /tmp/system_info.txt to S3 with a unique file name.
+          # Construct the command to download and execute command.sh,# then upload /tmp/system_info.txt to S3 with a unique file name.
+
           CMD="aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && aws s3 cp /tmp/system_info.txt s3://os-comparison-bucket/system_info_${server}_${INSTANCE_ID}.txt"
           echo "Command to run: $CMD"
 
@@ -93,7 +95,7 @@ jobs:
         done < scripts/serverlist.txt
       shell: bash
 
-    - name: 'Trigger AWS Lambda for Comparison'
+    - name: Trigger AWS Lambda for Comparison
       run: |
         echo "Triggering AWS Lambda function for comparison..."
         aws lambda invoke --function-name comparefiles --payload '{}' response.json
