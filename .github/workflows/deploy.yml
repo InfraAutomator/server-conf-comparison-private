@@ -14,17 +14,35 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v3
 
-      - name: Install AWS CLI (If Not Installed)
+      # - name: Install AWS CLI (If Not Installed)
+      #   run: |
+      #     sudo apt-get update
+      #     sudo apt-get install -y unzip
+      #     if ! command -v aws &> /dev/null; then
+      #       echo "AWS CLI not found. Installing..."
+      #       curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+      #       unzip -o awscliv2.zip
+      #       sudo ./aws/install
+      #     fi
+      #     aws --version
+      #   shell: bash
+
+      ## for iterating through each server
+      - name: Check and Install AWS CLI on All Servers
         run: |
-          sudo apt-get update
-          sudo apt-get install -y unzip
-          if ! command -v aws &> /dev/null; then
-            echo "AWS CLI not found. Installing..."
-            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-            unzip -o awscliv2.zip
-            sudo ./aws/install
-          fi
-          aws --version
+          while read -r server; do
+          echo "Checking AWS CLI on $server..."
+
+          ssh -o StrictHostKeyChecking=no -i key.pem user@$server "if ! command -v aws &> /dev/null; then 
+          echo 'AWS CLI not found. Installing on $server...'; 
+          sudo apt-get update && sudo apt-get install -y unzip;
+          curl 'https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip' -o 'awscliv2.zip';
+          unzip -o awscliv2.zip;
+          sudo ./aws/install;
+          fi;
+          echo 'AWS CLI version on $server: ' \$(aws --version)
+          " || echo "Failed to connect to $server"
+          done < serverlist.txt
         shell: bash
 
       - name: Configure AWS Credentials
