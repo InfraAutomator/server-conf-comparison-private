@@ -42,7 +42,7 @@ jobs:
           fi;
           echo 'AWS CLI version on $server: ' \$(aws --version)
           " || echo "Failed to connect to $server"
-          done < serverlist.txt
+          done < scripts/serverlist.txt
         shell: bash
 
       - name: Configure AWS Credentials
