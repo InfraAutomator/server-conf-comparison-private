@@ -143,56 +143,108 @@ jobs:
           aws s3 cp scripts/command.sh s3://os-comparison-bucket/command.sh
         shell: bash
 
+      # - name: Execute Command on EC2 Instances via SSM and Upload System Info
+      #   run: |
+      #     set +e  # Allow loop to continue on failure
+
+      #     while IFS= read -r server || [[ -n "$server" ]]; do
+      #       echo "-------------------------------------"
+      #       echo "Processing server with private IP: $server"
+
+      #       # Retrieve the Instance ID for the given private IP
+      #       INSTANCE_ID=$(aws ec2 describe-instances \
+      #         --filters "Name=private-ip-address,Values=$server" \
+      #         --query "Reservations[*].Instances[*].InstanceId" --output text)
+
+      #       if [[ -z "$INSTANCE_ID" ]]; then
+      #         echo "❌ No instance found for IP: $server. Skipping..."
+      #         continue
+      #       fi
+      #       echo "✅ Found Instance ID: $INSTANCE_ID for IP: $server"
+
+      #       # Construct the command to execute remotely via SSM
+      #       CMD="aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && aws s3 cp /tmp/system_info.txt s3://os-comparison-bucket/system_info_${server}_${INSTANCE_ID}.txt"
+
+      #       echo "🔹 Running SSM command on instance: $INSTANCE_ID"
+      #       COMMAND_ID=$(aws ssm send-command \
+      #         --document-name "AWS-RunShellScript" \
+      #         --targets "Key=instanceIds,Values=$INSTANCE_ID" \
+      #         --parameters '{"commands":["'"$CMD"'"]}' \
+      #         --region us-east-1 \
+      #         --query "Command.CommandId" --output text)
+
+      #       if [[ -z "$COMMAND_ID" ]]; then
+      #         echo "❌ Failed to send SSM command to instance $INSTANCE_ID"
+      #         continue
+      #       fi
+
+      #       echo "✅ SSM command sent with Command ID: $COMMAND_ID. Waiting for execution..."
+      #       sleep 20  # Adjust this delay as needed
+
+      #     done < scripts/serverlist.txt
+      #   shell: bash
       - name: Execute Command on EC2 Instances via SSM and Upload System Info
         run: |
-          set +e  # Allow loop to continue on failure
+          # Disable immediate exit so the loop continues even if one iteration fails
+           set +e
 
           while IFS= read -r server || [[ -n "$server" ]]; do
-            echo "-------------------------------------"
-            echo "Processing server with private IP: $server"
+           echo "-------------------------------------"
+           echo "Processing server with private IP: $server"
 
-            # Retrieve the Instance ID for the given private IP
-            INSTANCE_ID=$(aws ec2 describe-instances \
-              --filters "Name=private-ip-address,Values=$server" \
-              --query "Reservations[*].Instances[*].InstanceId" --output text)
-              
-            if [[ -z "$INSTANCE_ID" ]]; then
-              echo "❌ No instance found for IP: $server. Skipping..."
-              continue
+           # Retrieve the Instance ID for this private IP
+           INSTANCE_ID=$(aws ec2 describe-instances \
+           --filters "Name=private-ip-address,Values=$server" \
+           --query "Reservations[*].Instances[*].InstanceId" --output text)
+
+             if [[ -z "$INSTANCE_ID" ]]; then
+           echo "No instance found for IP: $server"
+           continue
             fi
-            echo "✅ Found Instance ID: $INSTANCE_ID for IP: $server"
+           echo "Found Instance ID: $INSTANCE_ID for IP: $server"
 
-            # Construct the command to execute remotely via SSM
-            CMD="aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && aws s3 cp /tmp/system_info.txt s3://os-comparison-bucket/system_info_${server}_${INSTANCE_ID}.txt"
+           # Construct the command to check AWS CLI, download & execute command.sh, and upload system_info.txt to S3
+              CMD="if ! command -v aws &> /dev/null; then
+              echo 'AWS CLI not found. Installing...';
+              sudo apt-get update && sudo apt-get install -y unzip;
+              curl 'https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip' -o 'awscliv2.zip';
+              unzip -o awscliv2.zip;
+              sudo ./aws/install;
+            fi;
+            aws --version;
+            aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh;
+            chmod +x /tmp/command.sh;
+            sudo bash /tmp/command.sh;
+            aws s3 cp /tmp/system_info.txt s3://os-comparison-bucket/system_info_${server}_${INSTANCE_ID}.txt"
 
-            echo "🔹 Running SSM command on instance: $INSTANCE_ID"
-            COMMAND_ID=$(aws ssm send-command \
-              --document-name "AWS-RunShellScript" \
-              --targets "Key=instanceIds,Values=$INSTANCE_ID" \
-              --parameters '{"commands":["'"$CMD"'"]}' \
-              --region us-east-1 \
-              --query "Command.CommandId" --output text)
+           echo "Command to run: $CMD"
 
-            if [[ -z "$COMMAND_ID" ]]; then
-              echo "❌ Failed to send SSM command to instance $INSTANCE_ID"
-              continue
-            fi
+           # Send the SSM command with the constructed command string.
+            FIRST_COMMAND_ID=$(aws ssm send-command \
+             --document-name "AWS-RunShellScript" \
+            --targets "Key=instanceIds,Values=$INSTANCE_ID" \
+             --parameters '{"commands":["'"$CMD"'"]}' \
+             --region us-east-1 \
+           --query "Command.CommandId" --output text)
 
-            echo "✅ SSM command sent with Command ID: $COMMAND_ID. Waiting for execution..."
-            sleep 20  # Adjust this delay as needed
+          if [[ -z "$FIRST_COMMAND_ID" ]]; then
+          echo "Failed to send SSM command to instance $INSTANCE_ID"
+           continue
+           fi
 
-            # Check if the system_info.txt file was uploaded to S3
-            # TARGET_FILE="system_info_${server}_${INSTANCE_ID}.txt"
-            # echo "🔍 Checking for file in S3: s3://os-comparison-bucket/${TARGET_FILE}..."
+           echo "SSM command sent with Command ID: $FIRST_COMMAND_ID. Waiting for execution..."
+           sleep 20  # Adjust this delay as needed
+          # Check if the system_info.txt file was uploaded to S3
+          TARGET_FILE="system_info_${server}_${INSTANCE_ID}.txt"
+          echo "Checking for file s3://os-comparison-bucket/${TARGET_FILE}..."
+           if aws s3 ls s3://os-comparison-bucket/"${TARGET_FILE}" > /dev/null 2>&1; then
+            echo "File ${TARGET_FILE} successfully uploaded to S3."
+            else
+           echo "File ${TARGET_FILE} not found in S3."
+           fi
 
-            # if aws s3 ls s3://os-comparison-bucket/"${TARGET_FILE}" > /dev/null 2>&1; then
-            #   echo "✅ File ${TARGET_FILE} successfully uploaded to S3."
-            # else
-            #   echo "❌ File ${TARGET_FILE} not found in S3. Check logs for errors."
-            # fi
-
-          done < scripts/serverlist.txt
-        shell: bash
+           done < scripts/serverlist.txt
+           shell: bash
 
       - name: Trigger AWS Lambda for Comparison
         run: |
