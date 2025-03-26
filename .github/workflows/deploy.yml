@@ -284,12 +284,37 @@ jobs:
 
         echo "Installing SSM Agent on instance: $INSTANCE_ID"
 
-        CMD='if [ -f /etc/os-release ]; then source /etc/os-release; case "$ID" in amzn) sudo yum install -y amazon-ssm-agent && sudo systemctl enable amazon-ssm-agent && sudo systemctl start amazon-ssm-agent ;; ubuntu) sudo snap install amazon-ssm-agent ;; rhel|centos) sudo yum install -y amazon-ssm-agent && sudo systemctl enable amazon-ssm-agent && sudo systemctl start amazon-ssm-agent ;; *) echo "Unsupported OS" ;; esac; else echo "OS details not found"; fi'
+        CMD=$(cat <<EOF
+        if [ -f /etc/os-release ]; then
+          source /etc/os-release
+          case "\$ID" in
+              amzn)
+                  sudo yum install -y amazon-ssm-agent
+                  sudo systemctl enable amazon-ssm-agent
+                  sudo systemctl start amazon-ssm-agent
+                  ;;
+              ubuntu)
+                  sudo snap install amazon-ssm-agent
+                  ;;
+              rhel|centos)
+                  sudo yum install -y amazon-ssm-agent
+                  sudo systemctl enable amazon-ssm-agent
+                  sudo systemctl start amazon-ssm-agent
+                  ;;
+              *)
+                  echo "Unsupported OS"
+                  ;;
+          esac
+        else
+          echo "OS details not found"
+         fi
+        EOF
+         )
 
         COMMAND_ID=$(aws ssm send-command \
         --document-name "AWS-RunShellScript" \
         --targets "Key=instanceIds,Values=$INSTANCE_ID" \
-        --parameters "{\"commands\":[\"$CMD\"]}" \
+        --parameters "{\"commands\":[\"$(echo "$CMD" | sed 's/"/\\"/g')\"]}" \
         --region "$AWS_REGION" \
         --query "Command.CommandId" --output text)
 
