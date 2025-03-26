@@ -177,7 +177,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      REQUIRED_IAM_ROLE: "ssmrequiredrole" # 🔹 Replace with your actual IAM Role Name
+      REQUIRED_IAM_ROLE: "ssmrequiredrole" # 🔹 Replace with your actual IAM Role Name customized
       AWS_REGION: "us-east-1" # 🔹 Replace with your AWS Region
 
     steps:
@@ -204,26 +204,40 @@ jobs:
         chmod 600 ~/.aws/credentials
       shell: bash
 
-    - name: Attach IAM Role to EC2 Instances
+    - name: Check and Attach IAM Role If Missing
       run: |
+        REQUIRED_IAM_ROLE="${{ env.REQUIRED_IAM_ROLE }}"
+        AWS_REGION="${{ env.AWS_REGION }}"
+
         while IFS= read -r server || [[ -n "$server" ]]; do
+          echo "Checking IAM role for instance with private IP: $server"
+
           INSTANCE_ID=$(aws ec2 describe-instances \
             --filters "Name=private-ip-address,Values=$server" \
             --query "Reservations[*].Instances[*].InstanceId" --output text)
 
           if [[ -z "$INSTANCE_ID" ]]; then
-            echo "No instance found for IP: $server"
+            echo "No instance found for IP: $server. Skipping."
             continue
           fi
 
-          echo "Attaching IAM role ${{ env.REQUIRED_IAM_ROLE }} to instance: $INSTANCE_ID"
+          IAM_ROLE=$(aws ec2 describe-instances \
+            --instance-ids "$INSTANCE_ID" \
+            --query "Reservations[0].Instances[0].IamInstanceProfile.Arn" --output text)
 
-          aws ec2 associate-iam-instance-profile \
-            --instance-id "$INSTANCE_ID" \
-            --iam-instance-profile Name="${{ env.REQUIRED_IAM_ROLE }}" \
-            --region "$AWS_REGION"
+          if [[ "$IAM_ROLE" == "None" ]]; then
+            echo "No IAM role attached to instance $INSTANCE_ID. Attaching $REQUIRED_IAM_ROLE..."
+            aws ec2 associate-iam-instance-profile \
+              --instance-id "$INSTANCE_ID" \
+              --iam-instance-profile Name="$REQUIRED_IAM_ROLE"
 
-          echo "IAM Role attached successfully!"
+            echo "Waiting for IAM role to attach..."
+            sleep 30  # Adjust as needed
+          else
+            echo "Instance $INSTANCE_ID already has an IAM role. Skipping."
+            continue
+          fi
+
         done < scripts/serverlist.txt
       shell: bash
 
@@ -235,7 +249,7 @@ jobs:
             --query "Reservations[*].Instances[*].InstanceId" --output text)
 
           if [[ -z "$INSTANCE_ID" ]]; then
-            echo "No instance found for IP: $server"
+            echo "No instance found for IP: $server. Skipping."
             continue
           fi
 
@@ -261,7 +275,7 @@ jobs:
             --query "Command.CommandId" --output text)
 
           if [[ -z "$COMMAND_ID" ]]; then
-            echo "Failed to send SSM installation command to instance $INSTANCE_ID"
+            echo "Failed to send SSM installation command to instance $INSTANCE_ID. Skipping."
             continue
           fi
 
@@ -285,7 +299,7 @@ jobs:
             --query "Reservations[*].Instances[*].InstanceId" --output text)
 
           if [[ -z "$INSTANCE_ID" ]]; then
-            echo "No instance found for IP: $server"
+            echo "No instance found for IP: $server. Skipping."
             continue
           fi
 
@@ -301,7 +315,7 @@ jobs:
             --query "Command.CommandId" --output text)
 
           if [[ -z "$COMMAND_ID" ]]; then
-            echo "Failed to send SSM command to instance $INSTANCE_ID"
+            echo "Failed to send SSM command to instance $INSTANCE_ID. Skipping."
             continue
           fi
 
