@@ -236,38 +236,72 @@ jobs:
         done < scripts/serverlist.txt
       shell: bash
 
+    # - name: Install SSM Agent on EC2 Instances
+    #   run: |
+    #     while IFS= read -r server || [[ -n "$server" ]]; do
+    #     INSTANCE_ID=$(aws ec2 describe-instances \
+    #     --filters "Name=private-ip-address,Values=$server" \
+    #     --query "Reservations[*].Instances[*].InstanceId" --output text)
+
+    #     if [[ -z "$INSTANCE_ID" ]]; then
+    #     echo "No instance found for IP: $server"
+    #     continue
+    #     fi
+
+    #     echo "Installing SSM Agent on instance: $INSTANCE_ID"
+
+    #     CMD="if [ -f /etc/os-release ]; then source /etc/os-release; case \\$ID in amzn) sudo yum install -y amazon-ssm-agent && sudo systemctl enable amazon-ssm-agent && sudo systemctl start amazon-ssm-agent ;; ubuntu) sudo snap install amazon-ssm-agent ;; rhel|centos) sudo yum install -y amazon-ssm-agent && sudo systemctl enable amazon-ssm-agent && sudo systemctl start amazon-ssm-agent ;; *) echo 'Unsupported OS' ;; esac; else echo 'OS details not found'; fi"
+
+    #     COMMAND_ID=$(aws ssm send-command \
+    #     --document-name "AWS-RunShellScript" \
+    #     --targets "Key=instanceIds,Values=$INSTANCE_ID" \
+    #     --parameters "{\"commands\":[\"$CMD\"]}" \
+    #     --region "$AWS_REGION" \
+    #     --query "Command.CommandId" --output text)
+
+    #     if [[ -z "$COMMAND_ID" ]]; then
+    #     echo "Failed to send SSM installation command to instance $INSTANCE_ID"
+    #     continue
+    #     fi
+
+    #     echo "SSM Agent installation command sent. Waiting 30 seconds..."
+    #     sleep 30
+
+    #     done < scripts/serverlist.txt
+    #   shell: bash
+
     - name: Install SSM Agent on EC2 Instances
       run: |
         while IFS= read -r server || [[ -n "$server" ]]; do
         INSTANCE_ID=$(aws ec2 describe-instances \
-        --filters "Name=private-ip-address,Values=$server" \
-        --query "Reservations[*].Instances[*].InstanceId" --output text)
+         --filters "Name=private-ip-address,Values=$server" \
+         --query "Reservations[*].Instances[*].InstanceId" --output text)
 
-        if [[ -z "$INSTANCE_ID" ]]; then
-        echo "No instance found for IP: $server"
-        continue
+         if [[ -z "$INSTANCE_ID" ]]; then
+         echo "No instance found for IP: $server"
+         continue
         fi
 
-        echo "Installing SSM Agent on instance: $INSTANCE_ID"
+         echo "Installing SSM Agent on instance: $INSTANCE_ID"
 
-        CMD="if [ -f /etc/os-release ]; then source /etc/os-release; case \\$ID in amzn) sudo yum install -y amazon-ssm-agent && sudo systemctl enable amazon-ssm-agent && sudo systemctl start amazon-ssm-agent ;; ubuntu) sudo snap install amazon-ssm-agent ;; rhel|centos) sudo yum install -y amazon-ssm-agent && sudo systemctl enable amazon-ssm-agent && sudo systemctl start amazon-ssm-agent ;; *) echo 'Unsupported OS' ;; esac; else echo 'OS details not found'; fi"
+        CMD="if [ -f /etc/os-release ]; then source /etc/os-release; case \\\"\\$ID\\\" in amzn) sudo yum install -y amazon-ssm-agent && sudo systemctl enable amazon-ssm-agent && sudo systemctl start amazon-ssm-agent ;; ubuntu) sudo snap install amazon-ssm-agent ;; rhel|centos) sudo yum install -y amazon-ssm-agent && sudo systemctl enable amazon-ssm-agent && sudo systemctl start amazon-ssm-agent ;; *) echo 'Unsupported OS' ;; esac; else echo 'OS details not found'; fi"
 
-        COMMAND_ID=$(aws ssm send-command \
-        --document-name "AWS-RunShellScript" \
-        --targets "Key=instanceIds,Values=$INSTANCE_ID" \
-        --parameters "{\"commands\":[\"$CMD\"]}" \
-        --region "$AWS_REGION" \
-        --query "Command.CommandId" --output text)
+         COMMAND_ID=$(aws ssm send-command \
+         --document-name "AWS-RunShellScript" \
+         --targets Key=instanceIds,Values="$INSTANCE_ID" \
+         --parameters '{"commands":["'"$CMD"'"]}' \
+         --region "$AWS_REGION" \
+         --query "Command.CommandId" --output text)
 
-        if [[ -z "$COMMAND_ID" ]]; then
-        echo "Failed to send SSM installation command to instance $INSTANCE_ID"
-        continue
-        fi
+         if [[ -z "$COMMAND_ID" ]]; then
+         echo "Failed to send SSM installation command to instance $INSTANCE_ID"
+         continue
+         fi
 
-        echo "SSM Agent installation command sent. Waiting 30 seconds..."
-        sleep 30
+         echo "SSM Agent installation command sent. Waiting 30 seconds..."
+         sleep 20
 
-        done < scripts/serverlist.txt
+         done < scripts/serverlist.txt
       shell: bash
 
     - name: Upload command.sh to S3
