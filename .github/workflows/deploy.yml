@@ -226,15 +226,10 @@ jobs:
             --query "Reservations[0].Instances[0].IamInstanceProfile.Arn" --output text)
 
           if [[ "$IAM_ROLE" == "None" ]]; then
-            echo "No IAM role attached to instance $INSTANCE_ID. Attaching $REQUIRED_IAM_ROLE..."
-            aws ec2 associate-iam-instance-profile \
-              --instance-id "$INSTANCE_ID" \
-              --iam-instance-profile Name="$REQUIRED_IAM_ROLE"
-
-            echo "Waiting for IAM role to attach..."
+            echo "No IAM role attached to instance $INSTANCE_ID. Skipping."
             sleep 30  # Adjust as needed
           else
-            echo "Instance $INSTANCE_ID already has an IAM role. Skipping."
+            echo "Instance $INSTANCE_ID already has an IAM role."
             continue
           fi
 
