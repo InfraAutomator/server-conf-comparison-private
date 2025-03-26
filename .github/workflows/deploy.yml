@@ -1,3 +1,168 @@
+# name: Execute Command on EC2 via SSM
+
+# on:
+#   push:
+#     branches:
+#     - main
+#   workflow_dispatch:
+#     # Allows manual trigger
+
+# jobs:
+#   run-on-ec2:
+#     runs-on: ubuntu-latest
+
+#     env:
+#       REQUIRED_IAM_ROLE: "ssmrequiredrole" # 🔹 Replace with your actual IAM Role Name customized
+#       AWS_REGION: "us-east-1" # 🔹 Replace with your AWS Region
+
+#     steps:
+#     - name: Checkout Repository
+#       uses: actions/checkout@v3
+
+#     - name: Install AWS CLI (If Not Installed)
+#       run: |
+#         sudo apt-get update
+#         sudo apt-get install -y unzip
+#         if ! command -v aws &> /dev/null; then
+#           echo "AWS CLI not found. Installing..."
+#           curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+#           unzip -o awscliv2.zip
+#           sudo ./aws/install
+#         fi
+#         aws --version
+#       shell: bash
+
+#     - name: Configure AWS Credentials
+#       run: |
+#         mkdir -p ~/.aws
+#         cp scripts/aws-credentials.txt ~/.aws/credentials
+#         chmod 600 ~/.aws/credentials
+#       shell: bash
+
+#     - name: Attach IAM Role If Missing
+#       run: |
+#         REQUIRED_IAM_ROLE="${{ env.REQUIRED_IAM_ROLE }}"
+#         AWS_REGION="${{ env.AWS_REGION }}"
+
+#         while IFS= read -r server || [[ -n "$server" ]]; do
+#           echo "Checking IAM role for instance with private IP: $server"
+
+#           INSTANCE_ID=$(aws ec2 describe-instances \
+#             --filters "Name=private-ip-address,Values=$server" \
+#             --query "Reservations[*].Instances[*].InstanceId" --output text)
+
+#           if [[ -z "$INSTANCE_ID" ]]; then
+#             echo "No instance found for IP: $server"
+#             continue
+#           fi
+
+#           IAM_ROLE=$(aws ec2 describe-instances \
+#             --instance-ids "$INSTANCE_ID" \
+#             --query "Reservations[0].Instances[0].IamInstanceProfile.Arn" --output text)
+
+#           if [[ "$IAM_ROLE" == "None" ]]; then
+#             echo "No IAM role attached to instance $INSTANCE_ID. Attaching $REQUIRED_IAM_ROLE..."
+#             aws ec2 associate-iam-instance-profile \
+#               --instance-id "$INSTANCE_ID" \
+#               --iam-instance-profile Name="$REQUIRED_IAM_ROLE"
+
+#             echo "Waiting for IAM role to attach..."
+#             sleep 30  # Adjust as needed
+#           fi
+
+#         done < scripts/serverlist.txt
+#       shell: bash
+
+#     - name: Install SSM Agent on EC2 Instances
+#       run: |
+#         while IFS= read -r server || [[ -n "$server" ]]; do
+#           INSTANCE_ID=$(aws ec2 describe-instances \
+#             --filters "Name=private-ip-address,Values=$server" \
+#             --query "Reservations[*].Instances[*].InstanceId" --output text)
+
+#           if [[ -z "$INSTANCE_ID" ]]; then
+#             echo "No instance found for IP: $server"
+#             continue
+#           fi
+
+#           echo "Installing SSM Agent on instance: $INSTANCE_ID"
+
+#           CMD="if [ -f /etc/os-release ]; then
+#                   source /etc/os-release;
+#                   case \$ID in
+#                       amzn) sudo yum install -y amazon-ssm-agent && sudo systemctl enable amazon-ssm-agent && sudo systemctl start amazon-ssm-agent ;;
+#                       ubuntu) sudo snap install amazon-ssm-agent ;;
+#                       rhel|centos) sudo yum install -y amazon-ssm-agent && sudo systemctl enable amazon-ssm-agent && sudo systemctl start amazon-ssm-agent ;;
+#                       *) echo 'Unsupported OS' ;;
+#                   esac
+#                else
+#                   echo 'OS details not found'
+#                fi"
+
+#           COMMAND_ID=$(aws ssm send-command \
+#             --document-name "AWS-RunShellScript" \
+#             --targets "Key=instanceIds,Values=$INSTANCE_ID" \
+#             --parameters '{"commands":["'"$CMD"'"]}' \
+#             --region "$AWS_REGION" \
+#             --query "Command.CommandId" --output text)
+
+#           if [[ -z "$COMMAND_ID" ]]; then
+#             echo "Failed to send SSM installation command to instance $INSTANCE_ID"
+#             continue
+#           fi
+
+#           echo "SSM Agent installation command sent. Waiting 30 seconds..."
+#           sleep 30
+
+#         done < scripts/serverlist.txt
+#       shell: bash
+
+#     - name: Upload command.sh to S3
+#       run: |
+#         echo "Uploading command.sh to S3..."
+#         aws s3 cp scripts/command.sh s3://os-comparison-bucket/command.sh
+#       shell: bash
+
+#     - name: Execute Command on EC2 Instances via SSM and Upload System Info
+#       run: |
+#         while IFS= read -r server || [[ -n "$server" ]]; do
+#           INSTANCE_ID=$(aws ec2 describe-instances \
+#             --filters "Name=private-ip-address,Values=$server" \
+#             --query "Reservations[*].Instances[*].InstanceId" --output text)
+
+#           if [[ -z "$INSTANCE_ID" ]]; then
+#             echo "No instance found for IP: $server"
+#             continue
+#           fi
+
+#           echo "Executing command on instance: $INSTANCE_ID"
+
+#           CMD="aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && aws s3 cp /tmp/system_info.txt s3://os-comparison-bucket/system_info_${server}_${INSTANCE_ID}.txt"
+
+#           COMMAND_ID=$(aws ssm send-command \
+#             --document-name "AWS-RunShellScript" \
+#             --targets "Key=instanceIds,Values=$INSTANCE_ID" \
+#             --parameters '{"commands":["'"$CMD"'"]}' \
+#             --region "$AWS_REGION" \
+#             --query "Command.CommandId" --output text)
+
+#           if [[ -z "$COMMAND_ID" ]]; then
+#             echo "Failed to send SSM command to instance $INSTANCE_ID"
+#             continue
+#           fi
+
+#           echo "SSM command sent with Command ID: $COMMAND_ID. Waiting 20 seconds..."
+#           sleep 20
+
+#         done < scripts/serverlist.txt
+#       shell: bash
+
+#     - name: Trigger AWS Lambda for Comparison
+#       run: |
+#         echo "Triggering AWS Lambda function for comparison..."
+#         aws lambda invoke --function-name comparefiles --payload '{}' response.json
+#       shell: bash
+
 name: Execute Command on EC2 via SSM
 
 on:
@@ -12,7 +177,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      REQUIRED_IAM_ROLE: "ssmrequiredrole" # 🔹 Replace with your actual IAM Role Name customized
+      REQUIRED_IAM_ROLE: "ssmrequiredrole" # 🔹 Replace with your actual IAM Role Name
       AWS_REGION: "us-east-1" # 🔹 Replace with your AWS Region
 
     steps:
@@ -39,14 +204,9 @@ jobs:
         chmod 600 ~/.aws/credentials
       shell: bash
 
-    - name: Attach IAM Role If Missing
+    - name: Attach IAM Role to EC2 Instances
       run: |
-        REQUIRED_IAM_ROLE="${{ env.REQUIRED_IAM_ROLE }}"
-        AWS_REGION="${{ env.AWS_REGION }}"
-
         while IFS= read -r server || [[ -n "$server" ]]; do
-          echo "Checking IAM role for instance with private IP: $server"
-
           INSTANCE_ID=$(aws ec2 describe-instances \
             --filters "Name=private-ip-address,Values=$server" \
             --query "Reservations[*].Instances[*].InstanceId" --output text)
@@ -56,20 +216,14 @@ jobs:
             continue
           fi
 
-          IAM_ROLE=$(aws ec2 describe-instances \
-            --instance-ids "$INSTANCE_ID" \
-            --query "Reservations[0].Instances[0].IamInstanceProfile.Arn" --output text)
+          echo "Attaching IAM role ${{ env.REQUIRED_IAM_ROLE }} to instance: $INSTANCE_ID"
 
-          if [[ "$IAM_ROLE" == "None" ]]; then
-            echo "No IAM role attached to instance $INSTANCE_ID. Attaching $REQUIRED_IAM_ROLE..."
-            aws ec2 associate-iam-instance-profile \
-              --instance-id "$INSTANCE_ID" \
-              --iam-instance-profile Name="$REQUIRED_IAM_ROLE"
+          aws ec2 associate-iam-instance-profile \
+            --instance-id "$INSTANCE_ID" \
+            --iam-instance-profile Name="${{ env.REQUIRED_IAM_ROLE }}" \
+            --region "$AWS_REGION"
 
-            echo "Waiting for IAM role to attach..."
-            sleep 30  # Adjust as needed
-          fi
-
+          echo "IAM Role attached successfully!"
         done < scripts/serverlist.txt
       shell: bash
 
