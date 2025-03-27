@@ -39,37 +39,32 @@ jobs:
         chmod 600 ~/.aws/credentials
       shell: bash
 
-    - name: Attach IAM Role If Missing
+    - name: Check IAM Role Attachment
       run: |
-        REQUIRED_IAM_ROLE="${{ env.REQUIRED_IAM_ROLE }}"
         AWS_REGION="${{ env.AWS_REGION }}"
 
         while IFS= read -r server || [[ -n "$server" ]]; do
-          echo "Checking IAM role for instance with private IP: $server"
+        echo "Checking IAM role for instance with private IP: $server"
 
-          INSTANCE_ID=$(aws ec2 describe-instances \
-            --filters "Name=private-ip-address,Values=$server" \
-            --query "Reservations[*].Instances[*].InstanceId" --output text)
+        INSTANCE_ID=$(aws ec2 describe-instances \
+        --filters "Name=private-ip-address,Values=$server" \
+        --query "Reservations[*].Instances[*].InstanceId" --output text)
 
-          if [[ -z "$INSTANCE_ID" ]]; then
-            echo "No instance found for IP: $server"
-            continue
-          fi
+        if [[ -z "$INSTANCE_ID" ]]; then
+        echo "No instance found for IP: $server. Skipping..."
+        continue
+        fi
 
-          IAM_ROLE=$(aws ec2 describe-instances \
-            --instance-ids "$INSTANCE_ID" \
-            --query "Reservations[0].Instances[0].IamInstanceProfile.Arn" --output text)
+        IAM_ROLE=$(aws ec2 describe-instances \
+        --instance-ids "$INSTANCE_ID" \
+        --query "Reservations[0].Instances[0].IamInstanceProfile.Arn" --output text)
 
-          if [[ "$IAM_ROLE" == "None" ]]; then
-            echo "No IAM role attached to instance $INSTANCE_ID. Attaching $REQUIRED_IAM_ROLE..."
-            aws ec2 associate-iam-instance-profile \
-              --instance-id "$INSTANCE_ID" \
-              --iam-instance-profile Name="$REQUIRED_IAM_ROLE"
+        if [[ "$IAM_ROLE" == "None" ]]; then
+        echo "No IAM role attached to instance $INSTANCE_ID. Skipping..."
+        continue
+        fi
 
-            echo "Waiting for IAM role to attach..."
-            sleep 30  # Adjust as needed
-          fi
-
+        echo "IAM role is attached for instance $INSTANCE_ID. Proceeding..."
         done < scripts/serverlist.txt
       shell: bash
 
