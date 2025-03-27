@@ -17,8 +17,12 @@
 
 #!/bin/bash
 ########################################################
-OUTPUT="Post_Migration`date '+%d%m%y'`.out"
-( 
+OUTPUT_FILE="/tmp/system_info.txt"
+
+# Clear previous contents if the file exists
+> $OUTPUT_FILE
+
+(
 echo    "-----------------------------------------------------------"
 
 echo -n "System Name:" ;  uname -n ;
@@ -44,7 +48,7 @@ echo
 
 echo -n -e "\tOS Version: "; uname -s | awk '{print}'
 
-echo -n -e "\tRelease: "; cat /etc/????*-release|uniq | awk '{print "\t",$1,$2,$3,$4,$5,$6,$7,$8}'
+echo -n -e "\tRelease: "; cat /etc/????*-release | uniq | awk '{print "\t",$1,$2,$3,$4,$5,$6,$7,$8}'
 
 echo
 
@@ -52,7 +56,7 @@ echo "Logical Disk Information"
 
 echo "========================"
 
-df -Ph | awk '{printf "\t%-25s\t%s\t%s\t%s\t%s\t%s\n",$1,$2,$3,$4,$5,$6}'|grep -vE "/tmp|/var"
+df -Ph | awk '{printf "\t%-25s\t%s\t%s\t%s\t%s\t%s\n",$1,$2,$3,$4,$5,$6}' | grep -vE "/tmp|/var"
 
 echo
 
@@ -95,4 +99,4 @@ echo
 find /u02 -type f | xargs du -sh
 echo
 echo "============================================End of Compliance Report============================================"
-) >> $OUTPUT
+) >> $OUTPUT_FILE
