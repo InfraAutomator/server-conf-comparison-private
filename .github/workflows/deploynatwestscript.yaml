@@ -70,14 +70,9 @@ jobs:
 
           echo "✅ SSM Agent is running on $server. Proceeding with command execution."
 
-          # CMD="aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && aws s3 cp /tmp/system_info.txt s3://os-comparison-bucket/system_info_${server}_${INSTANCE_ID}.txt"
-          # echo "Command to run: $CMD"
-          CMD="set -e && \
-          aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && \
-          chmod +x /tmp/command.sh && \
-          sudo bash /tmp/command.sh && \
-          aws s3 cp /tmp/system_info.txt s3://os-comparison-bucket/system_info_172.31.12.100_i-0bb00c5407e77f912.txt && \
-          aws s3 cp /tmp/debug.log s3://os-comparison-bucket/debug_172.31.12.100_i-0bb00c5407e77f912.log"
+          CMD="aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && aws s3 cp /tmp/system_info.txt s3://os-comparison-bucket/system_info_${server}_${INSTANCE_ID}.txt"
+          echo "Command to run: $CMD"
+
 
           FIRST_COMMAND_ID=$(aws ssm send-command \
           --document-name "AWS-RunShellScript" \
