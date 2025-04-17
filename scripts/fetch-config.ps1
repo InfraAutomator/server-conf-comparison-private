@@ -2,7 +2,7 @@
 $serverList = Get-Content "scripts/serverlist.txt"
 
 # AWS Region
-$awsRegion = "us-east-1"  # Change to your AWS region
+$awsRegion = "ap-south-1"  # Change to your AWS region
 
 # Read the command script content
 $commandContent = Get-Content "scripts/command.sh" -Raw
