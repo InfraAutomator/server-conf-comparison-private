@@ -27,12 +27,12 @@ cat > ~/.aws/credentials <<EOL
 [default]
 aws_access_key_id=AKIA4SYAMBWQNCHWSSUX
 aws_secret_access_key=A5aRyIqjx1Qk5Ngc/1t1CFuRvdiJfxpsNxtwtvs
-region=us-east-1
+region=ap-south-1
 EOL
 
 cat > ~/.aws/config <<EOL
 [default]
-region=us-east-1
+region=ap-south-1
 output=json
 EOL
 
