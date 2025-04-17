@@ -78,3 +78,6 @@ DEBUG_LOG="/tmp/debug.log"
   echo
   echo "============================================End of Compliance Report============================================"
 } >> "$OUTPUT_FILE" 2>> "$DEBUG_LOG"
+
+echo "✅ Script executed successfully." >> "$OUTPUT_FILE"
+
