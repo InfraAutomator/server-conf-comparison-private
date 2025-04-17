@@ -43,15 +43,14 @@ jobs:
       shell: bash
 
     - name: Execute Command on EC2 Instances via SSM and Upload System Info
+      shell: bash
       run: |
-        # Disable immediate exit so the loop continues even if one iteration fails
         set +e
 
         while IFS= read -r server || [[ -n "$server" ]]; do
           echo "-------------------------------------"
           echo "Processing server with private IP: $server"
 
-          # Retrieve the Instance ID for this private IP
           INSTANCE_ID=$(aws ec2 describe-instances \
             --filters "Name=private-ip-address,Values=$server" \
             --query "Reservations[*].Instances[*].InstanceId" --output text)
@@ -62,7 +61,6 @@ jobs:
           fi
           echo "Found Instance ID: $INSTANCE_ID for IP: $server"
 
-          # Check if SSM Agent is running
           SSM_STATUS=$(aws ssm describe-instance-information \
             --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
             --query "InstanceInformationList[*].InstanceId" --output text)
@@ -74,13 +72,10 @@ jobs:
 
           echo "✅ SSM Agent is running on $server. Proceeding with command execution."
 
-          # Construct the command to download and execute command.sh,
-          # then upload the generated Post_MigrationDDMMYY.out file to S3.
           CMD="aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && OUTPUT_FILE=\"Post_Migration\$(date '+%d%m%y').out\" && aws s3 cp /tmp/\$OUTPUT_FILE s3://os-comparison-bucket/\$OUTPUT_FILE"
 
           echo "Command to run: $CMD"
 
-          # Send the SSM command with the constructed command string.
           FIRST_COMMAND_ID=$(aws ssm send-command \
             --document-name "AWS-RunShellScript" \
             --targets "Key=instanceIds,Values=$INSTANCE_ID" \
@@ -94,10 +89,9 @@ jobs:
           fi
 
           echo "✅ SSM command sent successfully with Command ID: $FIRST_COMMAND_ID."
-          sleep 20  # Adjust this delay as needed
+          sleep 20
 
         done < scripts/serverlist.txt
-         shell: bash
 
     - name: Trigger AWS Lambda for Comparison
       run: |
