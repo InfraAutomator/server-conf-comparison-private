@@ -62,9 +62,22 @@ jobs:
           fi
           echo "Found Instance ID: $INSTANCE_ID for IP: $server"
 
-          # Construct the command to download and execute command.sh,# then upload /tmp/system_info.txt to S3 with a unique file name.
+          # Check if SSM Agent is running
+          SSM_STATUS=$(aws ssm describe-instance-information \
+            --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
+            --query "InstanceInformationList[*].InstanceId" --output text)
 
-          CMD="aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && aws s3 cp /tmp/system_info.txt s3://os-comparison-bucket/system_info_${server}_${INSTANCE_ID}.txt"
+          if [[ -z "$SSM_STATUS" ]]; then
+            echo "⚠️ Warning: SSM Agent is not installed or running on $server ($INSTANCE_ID). Skipping this instance."
+            continue
+          fi
+
+          echo "✅ SSM Agent is running on $server. Proceeding with command execution."
+
+          # Construct the command to download and execute command.sh,
+          # then upload the generated Post_MigrationDDMMYY.out file to S3.
+          CMD="aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && OUTPUT_FILE=\"Post_Migration\$(date '+%d%m%y').out\" && aws s3 cp /tmp/\$OUTPUT_FILE s3://os-comparison-bucket/\$OUTPUT_FILE"
+
           echo "Command to run: $CMD"
 
           # Send the SSM command with the constructed command string.
@@ -76,24 +89,15 @@ jobs:
             --query "Command.CommandId" --output text)
 
           if [[ -z "$FIRST_COMMAND_ID" ]]; then
-            echo "Failed to send SSM command to instance $INSTANCE_ID"
+            echo "❌ Failed to send SSM command to instance $INSTANCE_ID"
             continue
           fi
 
-          echo "SSM command sent with Command ID: $FIRST_COMMAND_ID. Waiting for execution..."
+          echo "✅ SSM command sent successfully with Command ID: $FIRST_COMMAND_ID."
           sleep 20  # Adjust this delay as needed
 
-          # Check if the system_info.txt file was uploaded to S3
-          TARGET_FILE="system_info_${server}_${INSTANCE_ID}.txt"
-          echo "Checking for file s3://os-comparison-bucket/${TARGET_FILE}..."
-          if aws s3 ls s3://os-comparison-bucket/"${TARGET_FILE}" > /dev/null 2>&1; then
-            echo "File ${TARGET_FILE} successfully uploaded to S3."
-          else
-            echo "File ${TARGET_FILE} not found in S3."
-          fi
-
         done < scripts/serverlist.txt
-      shell: bash
+         shell: bash
 
     - name: Trigger AWS Lambda for Comparison
       run: |
