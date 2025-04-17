@@ -113,11 +113,11 @@ jobs:
          --query "InstanceInformationList[*].InstanceId" --output text)
 
          if [[ -z "$SSM_STATUS" ]]; then
-         echo "⚠️ Warning: SSM Agent is not installed or running on $server ($INSTANCE_ID). Skipping this instance."
+         echo "Warning: SSM Agent is not installed or running on $server ($INSTANCE_ID). Skipping this instance."
          continue
          fi
 
-         echo "✅ SSM Agent is running on $server. Proceeding with command execution."
+         echo "SSM Agent is running on $server. Proceeding with command execution."
 
          # Construct the command to download and execute command.sh,
          # then upload /tmp/system_info.txt to S3 with a unique file name.
@@ -133,11 +133,11 @@ jobs:
          --query "Command.CommandId" --output text)
 
          if [[ -z "$FIRST_COMMAND_ID" ]]; then
-         echo "❌ Failed to send SSM command to instance $INSTANCE_ID"
+         echo "Failed to send SSM command to instance $INSTANCE_ID"
          continue
          fi
 
-         echo "✅ SSM command sent successfully with Command ID: $FIRST_COMMAND_ID."
+         echo "SSM command sent successfully with Command ID: $FIRST_COMMAND_ID."
          sleep 20  # Adjust this delay as needed
 
          done < scripts/serverlist.txt
