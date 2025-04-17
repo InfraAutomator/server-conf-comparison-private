@@ -44,58 +44,44 @@ jobs:
 
     - name: Execute Command on EC2 Instances via SSM and Upload System Info
       run: |
-        set +e  # Continue even if one iteration fails
-
-        REGION="ap-south-1"
-        BUCKET="os-comparison-bucket"
+        # Disable immediate exit so the loop continues even if one iteration fails
+        set +e
 
         while IFS= read -r server || [[ -n "$server" ]]; do
-        echo "-------------------------------------"
-        echo "Processing server with private IP: $server"
+          echo "-------------------------------------"
+          echo "Processing server with private IP: $server"
 
-        INSTANCE_ID=$(aws ec2 describe-instances \
-        --filters "Name=private-ip-address,Values=$server" \
-        --query "Reservations[*].Instances[*].InstanceId" --output text --region $REGION)
+          # Retrieve the Instance ID for this private IP
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=private-ip-address,Values=$server" \
+            --query "Reservations[*].Instances[*].InstanceId" --output text)
 
-        if [[ -z "$INSTANCE_ID" ]]; then
-        echo "❌ No instance found for IP: $server"
-        continue
-        fi
+          if [[ -z "$INSTANCE_ID" ]]; then
+            echo "No instance found for IP: $server"
+            continue
+          fi
+          echo "Found Instance ID: $INSTANCE_ID for IP: $server"
 
-        echo "✅ Found Instance ID: $INSTANCE_ID"
+          # Construct the command to download and execute command.sh,# then upload /tmp/system_info.txt to S3 with a unique file name.
 
-        SSM_STATUS=$(aws ssm describe-instance-information \
-        --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
-        --query "InstanceInformationList[*].InstanceId" --output text --region $REGION)
+          CMD="aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && aws s3 cp /tmp/system_info.txt s3://os-comparison-bucket/system_info_${server}_${INSTANCE_ID}.txt"
+          echo "Command to run: $CMD"
 
-        if [[ -z "$SSM_STATUS" ]]; then
-        echo "⚠️ SSM Agent is not active on $server ($INSTANCE_ID). Skipping..."
-        continue
-        fi
+          # Send the SSM command with the constructed command string.
+          FIRST_COMMAND_ID=$(aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --targets "Key=instanceIds,Values=$INSTANCE_ID" \
+            --parameters '{"commands":["'"$CMD"'"]}' \
+            --region us-east-1 \
+            --query "Command.CommandId" --output text)
 
-        echo "✅ SSM Agent is running. Sending command..."
+          if [[ -z "$FIRST_COMMAND_ID" ]]; then
+            echo "Failed to send SSM command to instance $INSTANCE_ID"
+            continue
+          fi
 
-
-
-        CMD="aws s3 cp s3://$BUCKET/command.sh /tmp/command.sh --region $REGION && \
-        chmod +x /tmp/command.sh && \
-        sudo bash /tmp/command.sh && \
-        if [ -f /tmp/system_info.txt ]; then \
-        aws s3 cp /tmp/system_info.txt s3://$BUCKET/system_info_${server}_${INSTANCE_ID}.txt --region $REGION; \
-        else \
-        echo '⚠️ system_info.txt not found'; \
-        fi"
-
-        ESCAPED_CMD=$(printf '%s\n' "$CMD" | sed 's/"/\\"/g')
-
-
-        COMMAND_ID=$(aws ssm send-command \
-        --document-name "AWS-RunShellScript" \
-        --targets "Key=instanceIds,Values=$INSTANCE_ID" \
-        --parameters "{\"commands\":[\"$ESCAPED_CMD\"]}" \
-        --comment "Run command.sh and upload output" \
-        --region $REGION \
-        --query "Command.CommandId" --output text)
+          echo "SSM command sent with Command ID: $FIRST_COMMAND_ID."
+          sleep 20  # Adjust this delay as needed
 
         done < scripts/serverlist.txt
       shell: bash
