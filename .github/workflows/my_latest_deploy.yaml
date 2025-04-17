@@ -143,8 +143,17 @@ jobs:
          done < scripts/serverlist.txt
       shell: bash
 
+    # - name: Trigger AWS Lambda for Comparison
+    #   run: |
+    #     echo "Triggering AWS Lambda function for comparison..."
+    #     aws lambda invoke --function-name comparefiles --payload '{}' response.json
+    #   shell: bash
     - name: Trigger AWS Lambda for Comparison
       run: |
         echo "Triggering AWS Lambda function for comparison..."
-        aws lambda invoke --function-name comparefiles --payload '{}' response.json
+        aws lambda invoke \
+        --function-name comparefiles \
+        --payload '{}' \
+        --region us-east-1 \
+        response.json
       shell: bash
