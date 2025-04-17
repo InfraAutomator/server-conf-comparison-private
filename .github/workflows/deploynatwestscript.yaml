@@ -80,8 +80,17 @@ jobs:
             continue
           fi
 
-          echo "SSM command sent with Command ID: $FIRST_COMMAND_ID."
+          echo "SSM command sent with Command ID: $FIRST_COMMAND_ID. Waiting for execution..."
           sleep 20  # Adjust this delay as needed
+
+          # Check if the system_info.txt file was uploaded to S3
+          TARGET_FILE="system_info_${server}_${INSTANCE_ID}.txt"
+          echo "Checking for file s3://os-comparison-bucket/${TARGET_FILE}..."
+          if aws s3 ls s3://os-comparison-bucket/"${TARGET_FILE}" > /dev/null 2>&1; then
+            echo "File ${TARGET_FILE} successfully uploaded to S3."
+          else
+            echo "File ${TARGET_FILE} not found in S3."
+          fi
 
         done < scripts/serverlist.txt
       shell: bash
