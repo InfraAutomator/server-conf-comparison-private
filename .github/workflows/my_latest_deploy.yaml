@@ -129,7 +129,7 @@ jobs:
            --document-name "AWS-RunShellScript" \
            --targets "Key=instanceIds,Values=$INSTANCE_ID" \
            --parameters '{"commands":["'"$CMD"'"]}' \
-           --region ap-south-1 \
+           --region us-east-1  \
            --query "Command.CommandId" --output text)
 
            if [[ -z "$FIRST_COMMAND_ID" ]]; then
