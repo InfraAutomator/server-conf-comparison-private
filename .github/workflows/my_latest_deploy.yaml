@@ -1,0 +1,159 @@
+#running script as of 25th March ##
+name: Execute Command on EC2 via SSM
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    # Allows manual trigger
+
+jobs:
+  run-on-ec2:
+    runs-on: ubuntu-latest # GitHub-hosted runner
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Install AWS CLI (If Not Installed)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip
+          if ! command -v aws &> /dev/null; then
+            echo "AWS CLI not found. Installing..."
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip -o awscliv2.zip
+            sudo ./aws/install
+          fi
+          aws --version
+        shell: bash
+
+      - name: Configure AWS Credentials
+        run: |
+          mkdir -p ~/.aws
+          cp scripts/aws-credentials.txt ~/.aws/credentials
+          chmod 600 ~/.aws/credentials
+        shell: bash
+
+      - name: Upload command.sh to S3
+        run: |
+          echo "Uploading command.sh to S3..."
+          aws s3 cp scripts/command.sh s3://os-comparison-bucket/command.sh
+        shell: bash
+      ## working module for executing command on ec2 instance ##
+      # - name: Execute Command on EC2 Instances via SSM and Upload System Info
+      #   run: |
+      #     # Disable immediate exit so the loop continues even if one iteration fails
+      #     set +e
+
+      #     while IFS= read -r server || [[ -n "$server" ]]; do
+      #       echo "-------------------------------------"
+      #       echo "Processing server with private IP: $server"
+
+      #       # Retrieve the Instance ID for this private IP
+      #       INSTANCE_ID=$(aws ec2 describe-instances \
+      #         --filters "Name=private-ip-address,Values=$server" \
+      #         --query "Reservations[*].Instances[*].InstanceId" --output text)
+
+      #       if [[ -z "$INSTANCE_ID" ]]; then
+      #         echo "No instance found for IP: $server"
+      #         continue
+      #       fi
+      #       echo "Found Instance ID: $INSTANCE_ID for IP: $server"
+
+      #       # Construct the command to download and execute command.sh,# then upload /tmp/system_info.txt to S3 with a unique file name.
+
+      #       CMD="aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && aws s3 cp /tmp/system_info.txt s3://os-comparison-bucket/system_info_${server}_${INSTANCE_ID}.txt"
+      #       echo "Command to run: $CMD"
+
+      #       # Send the SSM command with the constructed command string.
+      #       FIRST_COMMAND_ID=$(aws ssm send-command \
+      #         --document-name "AWS-RunShellScript" \
+      #         --targets "Key=instanceIds,Values=$INSTANCE_ID" \
+      #         --parameters '{"commands":["'"$CMD"'"]}' \
+      #         --region us-east-1 \
+      #         --query "Command.CommandId" --output text)
+
+      #       if [[ -z "$FIRST_COMMAND_ID" ]]; then
+      #         echo "Failed to send SSM command to instance $INSTANCE_ID"
+      #         continue
+      #       fi
+
+      #       echo "SSM command sent with Command ID: $FIRST_COMMAND_ID."
+      #       sleep 20  # Adjust this delay as needed
+
+      #     done < scripts/serverlist.txt
+      #   shell: bash
+
+      ## testing only
+      - name: Execute Command on EC2 Instances via SSM and Upload System Info
+        run: |
+          # Disable immediate exit so the loop continues even if one iteration fails
+           set +e
+
+           while IFS= read -r server || [[ -n "$server" ]]; do
+            echo "-------------------------------------"
+           echo "Processing server with private IP: $server"
+
+           # Retrieve the Instance ID for this private IP
+             INSTANCE_ID=$(aws ec2 describe-instances \
+             --filters "Name=private-ip-address,Values=$server" \
+             --query "Reservations[*].Instances[*].InstanceId" --output text)
+
+            if [[ -z "$INSTANCE_ID" ]]; then
+           echo "No instance found for IP: $server"
+           continue
+           fi
+           echo "Found Instance ID: $INSTANCE_ID for IP: $server"
+
+           # Check if SSM Agent is running
+           SSM_STATUS=$(aws ssm describe-instance-information \
+           --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
+           --query "InstanceInformationList[*].InstanceId" --output text)
+
+           if [[ -z "$SSM_STATUS" ]]; then
+           echo "Warning: SSM Agent is not installed or running on $server ($INSTANCE_ID). Skipping this instance."
+           continue
+           fi
+
+           echo "SSM Agent is running on $server. Proceeding with command execution."
+
+           # Construct the command to download and execute command.sh,
+           # then upload /tmp/system_info.txt to S3 with a unique file name.
+           CMD="aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && aws s3 cp /tmp/system_info.txt s3://os-comparison-bucket/system_info_${server}_${INSTANCE_ID}.txt"
+           echo "Command to run: $CMD"
+
+           # Send the SSM command with the constructed command string.
+           FIRST_COMMAND_ID=$(aws ssm send-command \
+           --document-name "AWS-RunShellScript" \
+           --targets "Key=instanceIds,Values=$INSTANCE_ID" \
+           --parameters '{"commands":["'"$CMD"'"]}' \
+           --region ap-south-1 \
+           --query "Command.CommandId" --output text)
+
+           if [[ -z "$FIRST_COMMAND_ID" ]]; then
+           echo "Failed to send SSM command to instance $INSTANCE_ID"
+           continue
+           fi
+
+           echo "SSM command sent successfully with Command ID: $FIRST_COMMAND_ID."
+           sleep 20  # Adjust this delay as needed
+
+           done < scripts/serverlist.txt
+        shell: bash
+
+      # - name: Trigger AWS Lambda for Comparison
+      #   run: |
+      #     echo "Triggering AWS Lambda function for comparison..."
+      #     aws lambda invoke --function-name comparefiles --payload '{}' response.json
+      #   shell: bash
+      - name: Trigger AWS Lambda for Comparison
+        run: |
+          echo "Triggering AWS Lambda function for comparison..."
+          aws lambda invoke \
+          --function-name comparefiles \
+          --payload '{}' \
+          --region us-east-1 \
+          response.json
+        shell: bash
