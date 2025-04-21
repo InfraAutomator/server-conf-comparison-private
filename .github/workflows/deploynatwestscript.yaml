@@ -9,7 +9,7 @@ on:
     # Allows manual trigger
 
 jobs:
-  run-on-ec2:
+  validate:
     runs-on: ubuntu-latest # GitHub-hosted runner
 
     steps:
