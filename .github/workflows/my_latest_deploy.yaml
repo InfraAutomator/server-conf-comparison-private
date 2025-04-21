@@ -121,7 +121,7 @@ jobs:
 
            # Construct the command to download and execute command.sh,
            # then upload /tmp/system_info.txt to S3 with a unique file name.
-           CMD="aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && aws s3 cp /tmp/system_info.txt s3://os-comparison-bucket/system_info_${server}_${INSTANCE_ID}.txt"
+           CMD="aws s3 cp s3://os-comparison-bucket/command.sh /tmp/command.sh && chmod +x /tmp/command.sh && sudo bash /tmp/command.sh && aws s3 cp /tmp/system_info.txt s3://os-comparison-bucket/system_info_${server}_${INSTANCE_ID}.txt --region us-east-1"
            echo "Command to run: $CMD"
 
            # Send the SSM command with the constructed command string.
@@ -129,7 +129,7 @@ jobs:
            --document-name "AWS-RunShellScript" \
            --targets "Key=instanceIds,Values=$INSTANCE_ID" \
            --parameters '{"commands":["'"$CMD"'"]}' \
-           --region us-east-1  \
+           --region ap-south-1 \
            --query "Command.CommandId" --output text)
 
            if [[ -z "$FIRST_COMMAND_ID" ]]; then
